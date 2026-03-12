@@ -201,6 +201,7 @@ class Qwen3DecoderLayer(nn.Module):
         if residual is not None:
             x, residual = self.input_layernorm(x, residual)
         else:
+            # 第一次进到 Decoder Layer 时，residual 是 None，此时仅进行 RMSNorm 计算，没有残差连接。
             residual = x  # Save BEFORE normalization
             x = self.input_layernorm(x)
         # Compute positions based on context (respecting sequence boundaries for batched prefill)
@@ -273,9 +274,11 @@ class Qwen3Model(nn.Module):
         gamma = torch.ones(hidden_size)
         self.norm = LayerNorm(gamma)
 
+    # Model 整体的前向传播
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
         x = self.embed_tokens(input_ids)
         residual = None
+        # layers 就是一个元素为 Decoder Layer 的列表，逐层前向传播，每层都传递残差
         for layer in self.layers:
             x, residual = layer(x, residual)
         x, _ = self.norm(x, residual)

@@ -1,5 +1,6 @@
 import torch.nn as nn 
 import torch
+# distributed 是一个分布式通讯包，提供了多种通信原语（如广播、聚合、点对点通信等），使得在分布式训练中不同进程之间能够高效地交换数据和同步状态。
 import torch.distributed as dist
 
 class LinearBase(nn.Module):
@@ -16,15 +17,21 @@ class LinearBase(nn.Module):
     ):
         super().__init__()
         # set tp_dim, tp_rank, tp_world_size for tensor parallelism
+        # tp_dim 表示按哪个维度进行张量并行，0 表示列并行，1 表示行并行
+        # tp_rank 表示当前 GPU 在并行中的排名
+        # tp_size 表示总共有多少 GPU 参与并行
         self.tp_dim = tp_dim 
         self.tp_rank = dist.get_rank()
         self.tp_size = dist.get_world_size()
         
         # create weight parameter with custom weight loader
+        # 这里的权重加载器是空的，需要在继承的子类中实现具体的加载逻辑，支持不同的并行方式（如列并行、行并行等）和不同的权重切分策略。
+        # 由于转置，PyTorch 的线性层权重是以 (output_size, input_size) 的形状存储在本地的，也就是和线性层相反
         self.weight = nn.Parameter(torch.empty(output_size, input_size))
         self.weight.weight_loader = self.weight_loader
 
         # create bias parameter
+        # 这里的偏置也是空的，需要在继承的子类中实现
         if bias:
             self.bias = nn.Parameter(torch.zeros(output_size))
             self.bias.weight_loader = self.weight_loader 
@@ -57,7 +64,7 @@ for name, param in model.named_parameters():
             param.data.copy_(loaded_weight)
 """
 
-# the simpliest Linear layer: ReplicatedLinear(LinearBase)
+# the simplest Linear layer: ReplicatedLinear(LinearBase)
 # where we simply copy the weight as the weight_loader
 # and run the forward as a normal linear layer
 class ReplicatedLinear(LinearBase):
@@ -69,13 +76,14 @@ class ReplicatedLinear(LinearBase):
     ):
         super().__init__(input_size, output_size, bias)
 
+    # 直接对权重做一个 copy，没有切分，适用于权重完全复制到每个 GPU 的情况 (如数据并行)，或者在加载时已经对权重进行了切分的情况。
     def weight_loader(self, param: nn.Parameter, loaded_weights: torch.Tensor):
         param.data.copy_(loaded_weights)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return nn.functional.linear(x, self.weight, self.bias)
 
-# columnsplit Linear layer: ColumnParallelLinear(LinearBase)
+# column-split Linear layer: ColumnParallelLinear(LinearBase)
 # get the original full parameter
 # compute the starting index of the column split
 # compute the dim size of the full parameter
@@ -96,12 +104,16 @@ class ColumnParallelLinear(LinearBase):
     def weight_loader(self, param: nn.Parameter, loaded_weights: torch.Tensor):
         param_data = param.data 
         # full_dim on the output column
+        # 计算本地存储的权重的总行数，也就是输出维度
         full_data_output_size = loaded_weights.size(0)
         # dim size after sharding
+        # 计算每个 GPU 上存储的权重的列数 (即切分后的维度大小)
         shard_size = full_data_output_size // self.tp_size
+        # 确保输出维度和原本定义的输出维度一致
         assert shard_size == param_data.size(0), "Shard size does not match parameter size."
         # starting index
         start_index = self.tp_rank * shard_size
+        # 对权重具体的划分，找到当前 GPU 需要加载的权重部分
         slided_weight = loaded_weights.narrow(0, start_index, shard_size)
         param_data.copy_(slided_weight)
 
