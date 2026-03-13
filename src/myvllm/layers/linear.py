@@ -124,7 +124,8 @@ class ColumnParallelLinear(LinearBase):
 class MergedColumnParallelLinear(ColumnParallelLinear):
     def __init__(
         self, 
-        input_size: int, 
+        input_size: int,
+        # 要合并的几个线性层的输出维度
         output_sizes: list[int], # e.g. merge QKV matrices to compute MM together and then split
         bias: bool = True,
     ):
@@ -155,6 +156,7 @@ class MergedColumnParallelLinear(ColumnParallelLinear):
         # find the correct slice to be loaded in the sharded parameter
         param_data = param_data.narrow(0, offset, shard_size)
         # shard the original full weight
+        # 计算要加载的权重的起始位置
         loaded_weights_start_index = self.tp_rank * shard_size
         shard_weights = loaded_weights.narrow(0, loaded_weights_start_index, shard_size)
         param_data.copy_(shard_weights)
